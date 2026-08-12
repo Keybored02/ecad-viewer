@@ -213,7 +213,9 @@ suite("native diff presentation", () => {
         // revision pane the other pane already shows it.
         expect(base.referenceItems).to.deep.equal([]);
         expect(head.referenceItems).to.deep.equal([]);
-        expect(base.colorizeChanges).to.equal(true);
+        // A single revision shown on its own paints in full theme color; only
+        // the composite scene subdues context and tints changes.
+        expect(base.colorizeChanges).to.equal(false);
         expect(base.signature).to.not.equal(head.signature);
     });
 
