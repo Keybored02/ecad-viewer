@@ -673,7 +673,17 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         return this.getAttribute("show-selection-panel") !== "false";
     }
 
-    public async replaceSources(update: EcadSourceUpdate): Promise<void> {
+    public async replaceSources(
+        update: EcadSourceUpdate,
+        options: { settleApps?: boolean } = {},
+    ): Promise<void> {
+        // A comparison load paints authoritatively through load_diff_document a
+        // beat later. Settling the project apps here first paints the board
+        // plain (full colour), so the composite scene lands over a visible
+        // full-colour frame — the board flashes colour, then goes grey. The
+        // caller passes settleApps:false to load the project without that
+        // pre-paint; the document still resolves from this.#project directly.
+        const settle_apps = options.settleApps ?? true;
         this.#trace_transition("sources.replace.request", {
             status: "start",
             revisionKey: update.revisionKey,
@@ -706,6 +716,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
                     update,
                     source_manifest_key,
                     generation,
+                    settle_apps,
                 ),
             );
         const traced = operation
@@ -746,6 +757,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         update: EcadSourceUpdate,
         source_manifest_key: string,
         generation: number,
+        settle_apps = true,
     ): Promise<void> {
         this.#adopted_comparison_project = null;
         const assert_current = () => {
@@ -760,7 +772,10 @@ export class ECadViewer extends KCUIElement implements InputContainer {
 
         if (!this.loaded) {
             this.#project.reset();
-            await this.#setup_project({ urls: [], blobs: update.sources });
+            await this.#setup_project(
+                { urls: [], blobs: update.sources },
+                settle_apps,
+            );
             assert_current();
         } else {
             const preferred_page =
@@ -785,8 +800,10 @@ export class ECadViewer extends KCUIElement implements InputContainer {
                     await this.update();
                     assert_current();
                 }
-                await this.#settle_project_apps(preferred_page);
-                assert_current();
+                if (settle_apps) {
+                    await this.#settle_project_apps(preferred_page);
+                    assert_current();
+                }
             } finally {
                 this.loading = false;
             }
@@ -1377,7 +1394,12 @@ export class ECadViewer extends KCUIElement implements InputContainer {
                     urls: [],
                     blobs: request.reference.sources,
                 }),
-                this.replaceSources(request.comparison),
+                // Load the comparison project without settling its apps: doing
+                // so would paint the board plain (full colour), and the diff
+                // scene below would then repaint it grey — a visible flash. The
+                // document is resolved directly from this.#project (see below),
+                // and load_diff_document paints the composite scene once.
+                this.replaceSources(request.comparison, { settleApps: false }),
             ]);
             assert_current();
             this.#document_comparison_key = request.comparisonKey;
@@ -3874,7 +3896,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         viewer?.draw_now?.() ?? viewer?.draw?.();
     }
 
-    async #setup_project(sources: EcadSources) {
+    async #setup_project(sources: EcadSources, settle_apps = true) {
         console.log(
             "[ECadViewer] #setup_project() called, has_sch:",
             this.has_sch,
@@ -3897,7 +3919,9 @@ export class ECadViewer extends KCUIElement implements InputContainer {
                 this.#active_tab,
             );
             await this.update();
-            await this.#settle_project_apps(this.#desired_page);
+            if (settle_apps) {
+                await this.#settle_project_apps(this.#desired_page);
+            }
             this.#ensure_camera_hook(this.#safe_board_viewer());
             this.#ensure_camera_hook(this.#safe_schematic_viewer());
             // Post-load autofit / first paint should notify camera consumers.

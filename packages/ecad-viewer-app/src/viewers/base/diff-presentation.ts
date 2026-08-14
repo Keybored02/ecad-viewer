@@ -521,6 +521,12 @@ export function build_diff_presentation(
  * `referenceItems` is empty by construction: retaining removed geometry over
  * the live document is a composite affordance. Here the other pane already
  * shows it.
+ *
+ * `colorizeChanges` is false: a single revision shown on its own is a real
+ * board, not a diff, so it paints in full theme color. Only the composite
+ * scene subdues unchanged context and tints changes; Side by Side and Old/New
+ * render each revision as it actually is. `statusByItem` is still built so a
+ * selection can replay a change into the selection layer in its status color.
  */
 export function build_diff_side_presentation(
     diff: EcadDocumentDiffIndex,
@@ -559,7 +565,7 @@ export function build_diff_side_presentation(
                 entry.sourceId,
             ]),
         })}:${side}`,
-        colorizeChanges: true,
+        colorizeChanges: false,
         statusByItem: status_by_item,
         itemsBySourceId: items_by_source_id,
         itemsBySideAndSourceId: items_by_side_and_source_id,
