@@ -63,6 +63,13 @@ export class DocumentPainter {
     #painters: Map<unknown, ItemPainter> = new Map();
     #paint_status_stack: EcadDiffPaintStatus[] = [];
     public diff_presentation: EcadDiffPresentation | null = null;
+    /**
+     * Paint every item in greyscale, regardless of diff status. This is a
+     * viewer-wide display preference, independent of the diff treatment: it
+     * composes on top of {@link diff_presentation} so a subdued diff still
+     * renders grey.
+     */
+    public grayscale = false;
 
     /**
      * Create a ViewPainter.
@@ -176,6 +183,13 @@ export class DocumentPainter {
         if (presentation?.colorizeChanges && !bypass) {
             this.gfx.color_transform = (color) =>
                 apply_diff_color(color, status, this.theme.background);
+        }
+        if (this.grayscale) {
+            // Compose over whatever transform is already in place (diff colour
+            // or none), so a subdued diff still greys and a plain board greys.
+            const base_transform = this.gfx.color_transform;
+            this.gfx.color_transform = (color) =>
+                (base_transform ? base_transform(color) : color).grayscale;
         }
         try {
             painter.paint(layer, item, ...rest);

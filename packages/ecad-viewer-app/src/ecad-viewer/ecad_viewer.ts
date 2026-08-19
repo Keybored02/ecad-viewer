@@ -491,6 +491,24 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         `,
     ];
 
+    // Observe `grayscale` natively so a host toggling the attribute (Prism sets
+    // it directly, not via the property) repaints. The @attribute decorator used
+    // elsewhere only reacts to property writes, which an external setAttribute
+    // does not perform.
+    static get observedAttributes(): string[] {
+        return ["grayscale"];
+    }
+
+    attributeChangedCallback(
+        name: string,
+        _old: string | null,
+        value: string | null,
+    ): void {
+        if (name === "grayscale") {
+            this.setGrayscale(value !== null);
+        }
+    }
+
     constructor() {
         super();
         this.addDisposable(this.#project);
@@ -605,12 +623,30 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         top: 0,
         bottom: 0,
     };
+    #grayscale = false;
 
     #apply_viewport_insets(): void {
         this.#safe_board_viewer()?.set_viewport_insets(this.#viewport_insets);
         this.#safe_schematic_viewer()?.set_viewport_insets(
             this.#viewport_insets,
         );
+    }
+
+    #apply_grayscale(): void {
+        const board = this.#safe_board_viewer();
+        const schematic = this.#safe_schematic_viewer();
+        if (board) board.grayscale = this.#grayscale;
+        if (schematic) schematic.grayscale = this.#grayscale;
+    }
+
+    /**
+     * Render every view in greyscale. A display preference the host toggles;
+     * it repaints the current document(s) and is reapplied whenever a viewer is
+     * (re)created.
+     */
+    public setGrayscale(value: boolean): void {
+        this.#grayscale = value;
+        this.#apply_grayscale();
     }
 
     /**
@@ -818,6 +854,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         this.#ensure_camera_hook(this.#safe_board_viewer());
         this.#ensure_camera_hook(this.#safe_schematic_viewer());
         this.#apply_viewport_insets();
+        this.#apply_grayscale();
         this.#emit_view_state_change();
         this.#emit_camera_change();
     }
@@ -1066,6 +1103,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
             this.#ensure_camera_hook(this.#safe_board_viewer());
             this.#ensure_camera_hook(this.#safe_schematic_viewer());
             this.#apply_viewport_insets();
+            this.#apply_grayscale();
             return;
         }
         this.loading = true;
@@ -1082,6 +1120,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         this.#ensure_camera_hook(this.#safe_board_viewer());
         this.#ensure_camera_hook(this.#safe_schematic_viewer());
         this.#apply_viewport_insets();
+        this.#apply_grayscale();
     }
 
     async #set_comparison_session_presentation(
@@ -4625,6 +4664,7 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         window.requestAnimationFrame(() => {
             this.#apply_viewer_activity();
             this.#apply_viewport_insets();
+            this.#apply_grayscale();
             this.#restore_comment_overlay_scenes();
             this.#ensure_camera_hook(this.#safe_board_viewer());
             this.#ensure_camera_hook(this.#safe_schematic_viewer());

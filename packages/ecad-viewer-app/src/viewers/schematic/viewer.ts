@@ -100,7 +100,7 @@ export class SchematicViewer extends DocumentViewer<
         return true;
     }
 
-    protected override get scene_cache_context(): unknown {
+    protected override get document_scene_identity(): unknown {
         return this.#instance_context?.sheet_path ?? "";
     }
 

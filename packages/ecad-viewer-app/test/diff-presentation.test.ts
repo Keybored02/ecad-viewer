@@ -723,3 +723,38 @@ suite("native diff presentation", () => {
         expect(leaders).to.deep.equal([]);
     });
 });
+
+suite("greyscale colour composition", () => {
+    // Mirrors DocumentPainter.paint_item: greyscale wraps whatever colour
+    // transform is already in place (diff colour, or none) and greys the result.
+    const compose = (
+        base: ((color: Color) => Color) | undefined,
+        color: Color,
+    ) => (base ? base(color) : color).grayscale;
+
+    const isGrey = (color: Color) =>
+        color.r === color.g && color.g === color.b;
+
+    test("greys a plain colour when no diff transform is active", () => {
+        const grey = compose(undefined, new Color(0.8, 0.1, 0.3, 1));
+        expect(isGrey(grey)).to.equal(true);
+    });
+
+    test("greys the output of the diff transform, and keeps its alpha", () => {
+        const status = "unchanged" as const;
+        const diff = (color: Color) =>
+            apply_diff_color(color, status, Color.black);
+        const source = new Color(0.2, 0.9, 0.4, 1);
+        const composed = compose(diff, source);
+        expect(isGrey(composed)).to.equal(true);
+        // Alpha is carried through from the diff treatment, not reset by grey.
+        expect(composed.a).to.equal(diff(source).a);
+    });
+
+    test("a changed status still greys to a neutral tone", () => {
+        const diff = (color: Color) =>
+            apply_diff_color(color, "added", Color.black);
+        const composed = compose(diff, new Color(0.1, 0.2, 0.9, 1));
+        expect(isGrey(composed)).to.equal(true);
+    });
+});
