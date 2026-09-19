@@ -19,6 +19,11 @@ import {
     resolve_variant_request,
 } from "../kicanvas/project";
 import type { NetRef } from "../kicad/net_ref";
+import {
+    net_statistics,
+    type NetStatistics,
+    type NetStatisticsRef,
+} from "../kicad/net_statistics";
 import { type EcadBlob, type EcadSources } from "../kicanvas/services/vfs";
 import { KCBoardAppElement } from "../kicanvas/elements/kc-board/app";
 import { KCSchematicAppElement } from "../kicanvas/elements/kc-schematic/app";
@@ -104,6 +109,7 @@ export type {
     EcadSemanticSelectionDetail,
     EcadSourceUpdate,
 } from "./host-adapter";
+export type { NetStatistics, NetStatisticsRef } from "../kicad/net_statistics";
 export {
     EcadCrossProbeEvent,
     EcadSemanticSelectionEvent,
@@ -3211,6 +3217,17 @@ export class ECadViewer extends KCUIElement implements InputContainer {
             // change events — treat as "not ready" instead of throwing.
             return null;
         }
+    }
+
+    /**
+     * Routing summary for a board net (length, layers, track and via counts).
+     * Resolves by net name first, then net code. `null` until the board has
+     * loaded or when the net is not on it.
+     */
+    public getNetStatistics(ref: NetStatisticsRef): NetStatistics | null {
+        const board = this.#safe_board_viewer()?.board;
+        if (!board) return null;
+        return net_statistics(board, ref);
     }
 
     public setPcbLayerVisibility(name: string, visible: boolean): boolean {
