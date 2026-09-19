@@ -436,13 +436,22 @@ export class ArcSegment implements BoardNode {
     }
 
     get bbox() {
-        const arc = MathArc.from_three_points(
+        return this.#arc.bbox;
+    }
+
+    /** Arc length along the centreline, the routed length of this track. */
+    get routed_length() {
+        const arc = this.#arc;
+        return arc.radius * Math.abs(arc.arc_angle.radians);
+    }
+
+    get #arc() {
+        return MathArc.from_three_points(
             this.start,
             this.mid,
             this.end,
             this.width,
         );
-        return arc.bbox;
     }
 }
 
