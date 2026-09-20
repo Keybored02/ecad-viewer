@@ -24,6 +24,7 @@ import {
     KiCanvasFitterMenuEvent,
     KiCanvasProbeEvent,
     KiCanvasSelectEvent,
+    select_modifiers,
 } from "../base/events";
 import type { VisibilityType } from "../base/view-layers";
 import { ViewerType } from "../base/viewer";
@@ -48,6 +49,55 @@ const log = new Logger("pcb:viewer");
 
 export const ZONE_DEFAULT_OPACITY = 0.6;
 
+function same_set(a: ReadonlySet<number>, b: ReadonlySet<number>): boolean {
+    if (a.size !== b.size) return false;
+    for (const value of a) if (!b.has(value)) return false;
+    return true;
+}
+
+/**
+ * The one net every hit belongs to, or null when the hits disagree or none
+ * of them carries a net. Unconnected items (net 0) do not count as a net.
+ */
+export function shared_net(
+    items: readonly BoardInteractiveItem[],
+): number | null {
+    let net: number | null = null;
+    for (const item of items) {
+        if (!item.net) continue;
+        if (net === null) net = item.net;
+        else if (net !== item.net) return null;
+    }
+    return net;
+}
+
+/** Specificity order for overlapping hits: a pad beats the track under it. */
+const PICK_ORDER: readonly Depth[] = [
+    Depth.PAD,
+    Depth.VIA,
+    Depth.LINE_SEGMENTS,
+    Depth.FOOT_PRINT,
+    Depth.ZONE,
+    Depth.GRAPHICS,
+];
+
+/** The item a click should select when several overlap under the cursor. */
+export function pick_item(
+    items: readonly BoardInteractiveItem[],
+): BoardInteractiveItem | null {
+    let best: BoardInteractiveItem | null = null;
+    let best_rank = Number.POSITIVE_INFINITY;
+    for (const item of items) {
+        const rank = PICK_ORDER.indexOf(item.depth);
+        if (rank === -1) continue;
+        if (rank < best_rank) {
+            best = item;
+            best_rank = rank;
+        }
+    }
+    return best ?? items[0] ?? null;
+}
+
 export type { BoardDiffSelectionEntry } from "./diff-layers";
 
 export class BoardViewer extends DocumentViewer<
@@ -56,8 +106,14 @@ export class BoardViewer extends DocumentViewer<
     LayerSet,
     BoardTheme
 > {
-    #should_restore_visibility = false;
     #zones_visibility = new Map<string, VisibilityType>();
+
+    /**
+     * The highlighted net set, in insertion order. Painted as a dim pass
+     * plus emphasised members; the native layers are never touched, so the
+     * user's layer map survives any highlight and clear.
+     */
+    #highlighted_nets = new Set<number>();
     #layer_visibility_ctrl: KCBoardLayersPanelElement;
 
     /**
@@ -175,17 +231,6 @@ export class BoardViewer extends DocumentViewer<
         this.#layer_visibility_ctrl = ctr;
     }
 
-    #restore_native_layers() {
-        if (!this.#should_restore_visibility) return;
-        const visibilities = this.layer_visibility;
-        if (visibilities) {
-            for (const layer of this.layers.in_ui_order()) {
-                layer.visible = visibilities.get(layer.name) ?? layer.visible;
-            }
-        }
-        this.#should_restore_visibility = false;
-    }
-
     #restore_zone_layers() {
         for (const layer of this.layers.zone_layers()) {
             const visible = this.#zones_visibility.get(layer.name);
@@ -194,10 +239,11 @@ export class BoardViewer extends DocumentViewer<
         this.#zones_visibility.clear();
     }
 
-    #crossprobe:
-        | { kind: "fp"; fp: board_items.Footprint }
-        | { kind: "net"; num: number }
-        | null = null;
+    /**
+     * A sticky emphasis that survives document clicks and tab switches:
+     * a cross-probed footprint, or the highlighted net set.
+     */
+    #crossprobe: { kind: "fp"; fp: board_items.Footprint } | null = null;
 
     // The layer the user isolated from the layer menu, if any. Layer isolation
     // and net cross-probe both drive layers.highlight(), so clearing a
@@ -205,28 +251,87 @@ export class BoardViewer extends DocumentViewer<
     // Tracking it lets clear_selection restore isolation after clearing a probe.
     #isolated_layer: string | null = null;
 
-    public highlight_net(num: number | null, emit_selection = true) {
-        this.#restore_native_layers();
-        this.#restore_zone_layers();
-        this.#layer_visibility_ctrl?.clear_highlight();
-        // Force a fresh paint even when re-applying the same net (e.g. after the
-        // host tab becomes visible and WebGL selection layers need rebuilding).
-        if (num != null) this.painter.filter_net = null;
-        if (
-            this.painter.paint_net(
-                this.board,
-                num,
-                this.layer_visibility ?? new Map<string, boolean>(),
-            )
-        ) {
-            if (num) {
-                this.#should_restore_visibility = true;
-                for (const layer of this.layers.in_ui_order()) {
-                    layer.visible = false;
-                }
-            }
-            this.draw();
+    /** Net codes currently highlighted, in insertion order. */
+    public get highlighted_nets(): ReadonlySet<number> {
+        return this.#highlighted_nets;
+    }
+
+    /**
+     * Replace the highlighted set. Unknown or zero net codes are dropped.
+     * Returns whether the set changed; repaints either way when non-empty so
+     * a re-applied set rebuilds selection layers a hidden canvas lost.
+     */
+    public set_highlighted_nets(nets: Iterable<number>): boolean {
+        const next = new Set<number>();
+        for (const num of nets) {
+            if (num && this.board.getNetName(num) !== undefined) next.add(num);
         }
+        const changed = !same_set(this.#highlighted_nets, next);
+        this.#highlighted_nets = next;
+        this.#paint_highlight();
+        return changed;
+    }
+
+    public add_highlighted_net(num: number): boolean {
+        if (!num || this.#highlighted_nets.has(num)) return false;
+        return this.set_highlighted_nets([...this.#highlighted_nets, num]);
+    }
+
+    public remove_highlighted_net(num: number): boolean {
+        if (!this.#highlighted_nets.has(num)) return false;
+        const next = new Set(this.#highlighted_nets);
+        next.delete(num);
+        return this.set_highlighted_nets(next);
+    }
+
+    public toggle_highlighted_net(num: number): boolean {
+        return this.#highlighted_nets.has(num)
+            ? this.remove_highlighted_net(num)
+            : this.add_highlighted_net(num);
+    }
+
+    public clear_highlighted_nets(): boolean {
+        return this.set_highlighted_nets([]);
+    }
+
+    /** Fit the camera to the highlighted copper. False when there is none. */
+    public focus_highlighted_nets(): boolean {
+        const bbox = this.painter.highlight_bbox;
+        if (!bbox || !bbox.valid) return false;
+        this.viewport.camera.bbox = bbox.grow(
+            Math.max(bbox.w * 0.5, 4),
+            Math.max(bbox.h * 0.5, 4),
+        );
+        this.draw();
+        return true;
+    }
+
+    #paint_highlight() {
+        if (this.#crossprobe) {
+            this.#crossprobe = null;
+            this.#restore_zone_layers();
+        }
+        const nets = this.#highlighted_nets;
+        this.painter.paint_highlight(this.board, nets, (name) =>
+            this.#layer_visible(name),
+        );
+        const labels = this.#net_labels_for_current_scene();
+        if (labels) labels.emphasized_nets = nets.size ? nets : null;
+        this.draw();
+    }
+
+    #layer_visible(name: string): boolean {
+        const configured = this.layer_visibility?.get(name);
+        if (configured !== undefined) return configured;
+        return this.layers.by_name(name)?.visible ?? false;
+    }
+
+    /**
+     * Replace the highlighted set with one net and, when asked, tell the
+     * host which net that is. Kept for the single-net cross-probe callers.
+     */
+    public highlight_net(num: number | null, emit_selection = true) {
+        this.set_highlighted_nets(num ? [num] : []);
         if (num && emit_selection) {
             this.dispatchEvent(
                 new KiCanvasSelectEvent({
@@ -239,17 +344,12 @@ export class BoardViewer extends DocumentViewer<
             );
         }
     }
-    protected override on_document_clicked(): void {
-        // Cross-probe / Focus is sticky until Esc or an explicit clear_selection.
-        // Document clicks (tab UI, 3D/SCH canvas) must not wipe a probe that was
-        // just applied from another view — that was showing as "frame only".
-        if (this.#crossprobe) return;
 
-        if (this.#should_restore_visibility) {
-            this.#restore_native_layers();
-            this.painter.clear_interactive();
-            this.draw();
-        }
+    protected override on_document_clicked(): void {
+        // Highlights and cross-probes are sticky until Esc or an explicit
+        // clear_selection. Document clicks (tab UI, 3D/SCH canvas) must not
+        // wipe a probe that was just applied from another view.
+        if (this.#crossprobe || this.#highlighted_nets.size) return;
 
         if (this.#zones_visibility.size) {
             this.painter.clear_interactive();
@@ -262,8 +362,11 @@ export class BoardViewer extends DocumentViewer<
     }
 
     public highlight_fp(fp: board_items.Footprint) {
+        // A footprint cross-probe replaces the net emphasis.
+        this.#highlighted_nets = new Set();
+        const labels = this.#net_labels_for_current_scene();
+        if (labels) labels.emphasized_nets = null;
         this.#crossprobe = { kind: "fp", fp };
-        this.#restore_native_layers();
         if (!this.#zones_visibility.size)
             for (const layer of this.layers.zone_layers()) {
                 this.#zones_visibility.set(layer.name, layer.visibility);
@@ -275,41 +378,58 @@ export class BoardViewer extends DocumentViewer<
 
     /** Single-click selection: green outline only (no hatch / zone hide). */
     public outline_fp(fp: board_items.Footprint) {
+        // An outline is an inspection, not an emphasis: keep the net set.
+        if (this.#highlighted_nets.size) return;
         this.#crossprobe = null;
-        this.#restore_native_layers();
         this.#restore_zone_layers();
-        this.painter.filter_net = null;
         this.painter.outline_footprint(fp);
         this.draw();
     }
 
+    /** Replace the highlight with one net and frame it. */
     public focus_net(num: number | null, emit_selection = true) {
-        this.#crossprobe = num != null ? { kind: "net", num } : null;
         this.highlight_net(num, emit_selection);
-        const net_bbox = this.painter.net_bbox;
-        if (net_bbox) {
-            this.viewport.camera.bbox = net_bbox.grow(
-                net_bbox.w * 0.5,
-                net_bbox.h * 0.5,
-            );
-        }
+        if (num) this.focus_highlighted_nets();
     }
 
-    public clear_selection() {
+    /**
+     * Drop the inspected object and footprint probe. The highlighted nets go
+     * too unless `keep_highlights` is set, which a host uses when only its
+     * inspected selection changed and its net set still stands.
+     */
+    public clear_selection(keep_highlights = false) {
         this.#crossprobe = null;
-        this.#restore_native_layers();
         this.#restore_zone_layers();
-        this.painter.filter_net = null;
+        if (keep_highlights && this.#highlighted_nets.size) {
+            this.painter?.clear_interactive();
+            this.#paint_highlight();
+            this.#restore_layer_isolation();
+            return;
+        }
+        this.#highlighted_nets = new Set();
+        if (this.painter && this.board) {
+            this.painter.paint_highlight(
+                this.board,
+                this.#highlighted_nets,
+                () => false,
+            );
+        }
+        const labels = this.#net_labels_for_current_scene();
+        if (labels) labels.emphasized_nets = null;
         this.painter?.clear_interactive();
-        // Clearing a selection or net probe must not undo the user's layer
-        // isolation, which is an independent view choice made from the layer
-        // menu. Re-apply it after clearing rather than dropping to no highlight.
+        this.#restore_layer_isolation();
+        this.draw();
+    }
+
+    // Clearing a selection or net probe must not undo the user's layer
+    // isolation, which is an independent view choice made from the layer
+    // menu. Re-apply it after clearing rather than dropping to no highlight.
+    #restore_layer_isolation() {
         const isolated = this.#isolated_layer
             ? this.layers?.by_name(this.#isolated_layer)
             : null;
         this.layers?.highlight(isolated ?? null);
         this.#layer_visibility_ctrl?.update_item_states();
-        this.draw();
     }
 
     public capture_diff_layer_visibility(): Map<string, boolean> {
@@ -360,25 +480,19 @@ export class BoardViewer extends DocumentViewer<
      */
     public override set_active(active: boolean) {
         super.set_active(active);
-        if (!active || !this.#crossprobe) return;
+        if (!active) return;
+        if (!this.#crossprobe && !this.#highlighted_nets.size) return;
         // Defer one frame so any document-click handlers from the tab switch
-        // run first; then re-bake Focus/hatch on a visible canvas.
+        // run first; then re-bake the emphasis on a visible canvas. The
+        // camera is left alone: re-showing a tab is not a fit request.
         const probe = this.#crossprobe;
+        const nets = this.#highlighted_nets;
         requestAnimationFrame(() => {
-            if (this.#crossprobe !== probe) return;
-            if (probe.kind === "fp") {
-                this.highlight_fp(probe.fp);
+            if (probe) {
+                if (this.#crossprobe === probe) this.highlight_fp(probe.fp);
                 return;
             }
-            this.painter.filter_net = null;
-            this.highlight_net(probe.num, false);
-            const net_bbox = this.painter.net_bbox;
-            if (net_bbox) {
-                this.viewport.camera.bbox = net_bbox.grow(
-                    net_bbox.w * 0.5,
-                    net_bbox.h * 0.5,
-                );
-            }
+            if (this.#highlighted_nets === nets) this.#paint_highlight();
         });
     }
 
@@ -397,6 +511,7 @@ export class BoardViewer extends DocumentViewer<
 
     override on_click(pos: Vec2, event?: MouseEvent): void {
         const items = this.find_items_under_pos(pos);
+        const modifiers = select_modifiers(event);
         const pad = items.find(
             (entry) =>
                 entry.depth === Depth.PAD &&
@@ -417,45 +532,45 @@ export class BoardViewer extends DocumentViewer<
             this.dispatchEvent(new KiCanvasProbeEvent({ phase: "clear" }));
         }
 
-        if (items.length > 0) {
-            if (items.length == 1) {
-                const it = items[0];
-                if (it) {
-                    // Outline only when the hit is the footprint itself — pad/track
-                    // single-click is panel selection without component outline.
-                    if (
-                        it.item &&
-                        (it.item as { typeId?: string }).typeId === "Footprint"
-                    ) {
-                        this.outline_fp(it.item as board_items.Footprint);
-                    }
-                    this.dispatchEvent(
-                        new KiCanvasSelectEvent({
-                            item: it.item,
-                            previous: null,
-                            intent: "select",
-                        }),
-                    );
-                    this.dispatchEvent(
-                        new KiCanvasFitterMenuEvent({
-                            items: [],
-                        }),
-                    );
-                }
-            } else {
+        // Shift-click toggles the net of the most specific item under the
+        // cursor: the pad the user aimed at, not the other-layer track that
+        // happens to run beneath it. An unconnected pick falls back to the
+        // net its neighbours share, so a hole over one net still counts.
+        if (modifiers?.shift) {
+            const target = pick_item(items);
+            const net = target?.net || shared_net(items);
+            if (net && target) {
                 this.dispatchEvent(
                     new KiCanvasSelectEvent({
-                        item: null,
+                        item: target.item,
                         previous: null,
                         intent: "select",
-                    }),
-                );
-                this.dispatchEvent(
-                    new KiCanvasFitterMenuEvent({
-                        items: items,
+                        operation: "toggle",
+                        modifiers,
                     }),
                 );
             }
+            // A shift-click on nothing (or on an unconnected item) is a
+            // no-op: it must not clear what the user is building up.
+            return;
+        }
+
+        // Plain click: the most specific item wins (pad over via over track
+        // over footprint), never a pop-up asking the user to choose.
+        const target = pick_item(items);
+        if (target?.item) {
+            if ((target.item as { typeId?: string }).typeId === "Footprint") {
+                this.outline_fp(target.item as board_items.Footprint);
+            }
+            this.dispatchEvent(
+                new KiCanvasSelectEvent({
+                    item: target.item,
+                    previous: null,
+                    intent: "select",
+                    operation: "replace",
+                    modifiers,
+                }),
+            );
         } else {
             // Truly empty click (nothing under the cursor): emit an empty
             // selection so the host can deselect. Previously nothing was
@@ -465,9 +580,12 @@ export class BoardViewer extends DocumentViewer<
                     item: null,
                     previous: null,
                     intent: "select",
+                    operation: "replace",
+                    modifiers,
                 }),
             );
         }
+        this.dispatchEvent(new KiCanvasFitterMenuEvent({ items: [] }));
     }
 
     get layer_visibility() {
@@ -561,7 +679,6 @@ export class BoardViewer extends DocumentViewer<
 
         const fp = this.#resolve_footprint(it.item);
         if (fp) {
-            this.painter.filter_net = null;
             this.highlight_fp(fp);
             const b = fp.bbox;
             this.viewport.camera.bbox = b.grow(

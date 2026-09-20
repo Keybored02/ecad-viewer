@@ -20,6 +20,12 @@ import {
 } from "../kicanvas/project";
 import type { NetRef } from "../kicad/net_ref";
 import {
+    EcadHighlightChangeEvent,
+    resolve_board_net,
+    type EcadHighlightChangeDetail,
+    type EcadNetRef,
+} from "./highlight";
+import {
     net_statistics,
     type NetStatistics,
     type NetStatisticsRef,
@@ -106,9 +112,13 @@ import { ecadPerfLog } from "../kicanvas/perf_log";
 export type {
     EcadCrossProbeRequest,
     EcadHostContext,
+    EcadSelectionModifiers,
+    EcadSelectionOperation,
     EcadSemanticSelectionDetail,
     EcadSourceUpdate,
 } from "./host-adapter";
+export type { EcadNetRef, EcadHighlightChangeDetail } from "./highlight";
+export { EcadHighlightChangeEvent } from "./highlight";
 export type { NetStatistics, NetStatisticsRef } from "../kicad/net_statistics";
 export {
     EcadCrossProbeEvent,
@@ -2489,10 +2499,78 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         this.#safe_schematic_viewer()?.set_comment_mode(enabled);
     }
 
-    public clearSelection(): void {
+    /**
+     * Drop the inspected object in both viewers. The highlighted nets are
+     * dropped too unless `keepHighlights` is set: a host that owns the set
+     * passes it when only its inspected selection changed.
+     */
+    public clearSelection(options: { keepHighlights?: boolean } = {}): void {
         this.#probe_generation += 1;
-        this.#safe_board_viewer()?.clear_selection();
+        const board_viewer = this.#safe_board_viewer();
+        const had_nets = (board_viewer?.highlighted_nets.size ?? 0) > 0;
+        board_viewer?.clear_selection(options.keepHighlights === true);
         this.#safe_schematic_viewer()?.clear_selection();
+        if (had_nets && !options.keepHighlights)
+            this.#emit_highlight_change("clear");
+    }
+
+    /**
+     * Replace the highlighted nets on the board. Nets resolve by name first
+     * (stable across saves), then by code; unresolved refs are reported, not
+     * guessed. Never moves the camera unless `focus` is set. The host owns
+     * this set, so no `ecad-viewer:highlight-change` is emitted for it.
+     */
+    public setHighlightedNets(
+        nets: readonly EcadNetRef[],
+        options: { focus?: boolean } = {},
+    ): { applied: EcadNetRef[]; unresolved: EcadNetRef[] } {
+        const board_viewer = this.#safe_board_viewer();
+        const board = board_viewer?.board;
+        if (!board_viewer || !board)
+            return { applied: [], unresolved: [...nets] };
+        const applied: EcadNetRef[] = [];
+        const unresolved: EcadNetRef[] = [];
+        const codes: number[] = [];
+        for (const ref of nets) {
+            const code = resolve_board_net(board, ref);
+            if (code === undefined) {
+                unresolved.push(ref);
+                continue;
+            }
+            codes.push(code);
+            applied.push({
+                name: board.getNetName(code) ?? ref.name,
+                netCode: code,
+            });
+        }
+        board_viewer.set_highlighted_nets(codes);
+        if (options.focus) board_viewer.focus_highlighted_nets();
+        return { applied, unresolved };
+    }
+
+    /** The board's highlighted nets, in the order they were added. */
+    public getHighlightedNets(): EcadNetRef[] {
+        const board_viewer = this.#safe_board_viewer();
+        const board = board_viewer?.board;
+        if (!board_viewer || !board) return [];
+        return Array.from(board_viewer.highlighted_nets, (code) => ({
+            name: board.getNetName(code) ?? "",
+            netCode: code,
+        }));
+    }
+
+    /** Fit the board camera to the highlighted copper. False when empty. */
+    public focusHighlightedNets(): boolean {
+        return this.#safe_board_viewer()?.focus_highlighted_nets() ?? false;
+    }
+
+    #emit_highlight_change(source: EcadHighlightChangeDetail["source"]) {
+        this.dispatchEvent(
+            new EcadHighlightChangeEvent({
+                nets: this.getHighlightedNets(),
+                source,
+            }),
+        );
     }
 
     /**
@@ -2525,55 +2603,16 @@ export class ECadViewer extends KCUIElement implements InputContainer {
             const board_viewer = this.#safe_board_viewer();
             if (board_viewer) {
                 if (request.kind === "net") {
-                    const requested_name = request.net ?? value;
-                    // Prefer stable net *name*. Host/3D netCode is only used when
-                    // it matches an entry in the board nets table (KiCad 10 boards
-                    // synthesize codes from names; 3D ids are not interchangeable).
-                    const by_name = requested_name
-                        ? board_viewer.board.nets.find(
-                              (net) => net.name === requested_name,
-                          )
-                        : undefined;
-                    const by_code =
-                        request.netCode != null
-                            ? board_viewer.board.nets.find(
-                                  (net) => net.number === request.netCode,
-                              )
-                            : undefined;
-                    let net_code = by_name?.number ?? by_code?.number;
-                    if (net_code === undefined && requested_name) {
-                        for (const fp of board_viewer.board.footprints) {
-                            for (const pad of fp.pads ?? []) {
-                                if (pad.net?.name === requested_name) {
-                                    net_code = pad.net.number;
-                                    break;
-                                }
-                            }
-                            if (net_code !== undefined) break;
-                        }
-                    }
-                    // Resolve via copper uuid from the semantic index when present.
-                    if (net_code === undefined && request.uuids?.length) {
-                        const ids = new Set(request.uuids);
-                        for (const segment of board_viewer.board.segments) {
-                            const id = segment.uuid || segment.tstamp;
-                            if (id && ids.has(id) && segment.net) {
-                                net_code = segment.net;
-                                break;
-                            }
-                        }
-                        if (net_code === undefined) {
-                            for (const via of board_viewer.board.vias) {
-                                const id = via.uuid || via.tstamp;
-                                if (id && ids.has(id) && via.net) {
-                                    net_code = via.net;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    const net_code = resolve_board_net(board_viewer.board, {
+                        name: request.net ?? value,
+                        netCode: request.netCode,
+                        uuids: request.uuids,
+                    });
                     if (net_code !== undefined) {
+                        // A cross-probe is a replace-of-one; tell the host so
+                        // a multi-net collection can follow.
                         board_viewer.focus_net(net_code, false);
+                        this.#emit_highlight_change("crossprobe");
                         return true;
                     }
                 } else {
@@ -4205,13 +4244,32 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         let detail = normalize_board_selection(item, board);
         if (!detail) return;
         this.#attach_item_bounds_pcb(detail, item, viewer!);
+        detail.operation = select.detail.operation ?? "replace";
+        if (select.detail.modifiers) detail.modifiers = select.detail.modifiers;
         const intent = select.detail.intent ?? "select";
         if (intent === "crossprobe") {
             detail = promote_pad_to_net_detail(detail);
             this.dispatchEvent(new EcadCrossProbeEvent(detail));
+            // The viewer already replaced its set with this net.
+            this.#emit_highlight_change("crossprobe");
             return;
         }
+        // Without a host the element is the only owner of the set, so a
+        // shift-click toggles here. A host (source-mode="host") owns it and
+        // answers the relayed gesture with setHighlightedNets().
+        if (
+            detail.operation === "toggle" &&
+            detail.netCode &&
+            !this.#host_owns_highlights()
+        ) {
+            viewer!.toggle_highlighted_net(detail.netCode);
+            this.#emit_highlight_change("gesture");
+        }
         this.dispatchEvent(new EcadSemanticSelectionEvent(detail));
+    }
+
+    #host_owns_highlights(): boolean {
+        return this.getAttribute("source-mode") === "host";
     }
 
     #relay_schematic_selection(event: Event) {
@@ -4239,6 +4297,8 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         );
         if (!detail) return;
         this.#attach_item_bounds_sch(detail, item, viewer!);
+        detail.operation = select.detail.operation ?? "replace";
+        if (select.detail.modifiers) detail.modifiers = select.detail.modifiers;
         const intent = select.detail.intent ?? "select";
         if (intent === "crossprobe") {
             this.dispatchEvent(new EcadCrossProbeEvent(detail));

@@ -11,7 +11,7 @@
 */
 
 import { BBox, Camera2 } from "../../base/math";
-import { Renderer } from "../../graphics";
+import { Color, Renderer } from "../../graphics";
 import { KicadPCB } from "../../kicad";
 import * as board_items from "../../kicad/board";
 import { CopperLayerNames, LayerNames, LayerSet, ViewLayer } from "./layers";
@@ -33,38 +33,20 @@ import {
     type NetLabelOptions,
 } from "./net-label-painter";
 
-type Candidate =
-    | {
-          kind: "pad";
-          layer: string;
-          min_zoom: number;
-          bbox: BBox;
-          pad: board_items.Pad;
-      }
-    | {
-          kind: "segment";
-          layer: string;
-          min_zoom: number;
-          bbox: BBox;
-          segment: board_items.LineSegment;
-          name: string;
-      }
-    | {
-          kind: "arc";
-          layer: string;
-          min_zoom: number;
-          bbox: BBox;
-          arc: board_items.ArcSegment;
-          name: string;
-      }
-    | {
-          kind: "via";
-          layer: string;
-          min_zoom: number;
-          bbox: BBox;
-          via: board_items.Via;
-          name: string;
-      };
+type Candidate = {
+    layer: string;
+    min_zoom: number;
+    bbox: BBox;
+    net: number;
+} & (
+    | { kind: "pad"; pad: board_items.Pad }
+    | { kind: "segment"; segment: board_items.LineSegment; name: string }
+    | { kind: "arc"; arc: board_items.ArcSegment; name: string }
+    | { kind: "via"; via: board_items.Via; name: string }
+);
+
+/** Extension layer that carries highlighted nets' labels above the dim pass. */
+export const EMPHASIS_LABEL_CHANNEL = "net-label-emphasis";
 
 function segment_bbox(
     a: { x: number; y: number },
@@ -103,8 +85,16 @@ export class NetLabelLayers {
     #last_zoom: number | null = null;
     #last_options: NetLabelOptions | null = null;
     #last_copper_visible = false;
+    #last_emphasis: string | null = null;
 
     #options: NetLabelOptions = { ...DEFAULT_NET_LABEL_OPTIONS };
+
+    /**
+     * Net codes whose labels are repeated on the foreground emphasis layer
+     * while a highlight dims the board (issue #306). Null when no highlight
+     * is active; the emphasis layer is then empty.
+     */
+    #emphasized_nets: ReadonlySet<number> | null = null;
 
     constructor(
         public gfx: Renderer,
@@ -121,15 +111,45 @@ export class NetLabelLayers {
         this.#options = { ...value };
     }
 
+    get emphasized_nets(): ReadonlySet<number> | null {
+        return this.#emphasized_nets;
+    }
+
+    set emphasized_nets(nets: ReadonlySet<number> | null) {
+        this.#emphasized_nets = nets && nets.size ? new Set(nets) : null;
+    }
+
+    /**
+     * Rebuild key for the emphasis copy: the net set plus the label layers'
+     * visibility, since the copy is painted once per rebuild and must follow
+     * a layer the user hides or shows mid-highlight.
+     */
+    #emphasis_key(): string {
+        if (!this.#emphasized_nets) return "";
+        const nets = Array.from(this.#emphasized_nets).sort().join(",");
+        const visible = this.#layers
+            .map((layer) => (layer.visible ? "1" : "0"))
+            .join("");
+        return `${nets}|${visible}`;
+    }
+
+    #emphasis_layer(): ViewLayer {
+        return this.layer_set.extension_layer(
+            EMPHASIS_LABEL_CHANNEL,
+            "foreground",
+        );
+    }
+
     /** Drop every label layer's graphics and force the next update to rebuild. */
     reset(): void {
-        for (const layer of this.#layers) {
+        for (const layer of [...this.#layers, this.#emphasis_layer()]) {
             layer.graphics?.dispose();
             layer.graphics = undefined;
         }
         this.#last_region = null;
         this.#last_zoom = null;
         this.#last_options = null;
+        this.#last_emphasis = null;
     }
 
     /**
@@ -151,11 +171,13 @@ export class NetLabelLayers {
         const viewport = this.camera.bbox;
         const options = this.#options;
         const band = NetLabelLayers.ZOOM_REBUILD_BAND;
+        const emphasis = this.#emphasis_key();
         const options_changed =
             !this.#last_options ||
             this.#last_options.padNumbers !== options.padNumbers ||
             this.#last_options.padNetNames !== options.padNetNames ||
-            this.#last_options.trackNetNames !== options.trackNetNames;
+            this.#last_options.trackNetNames !== options.trackNetNames ||
+            this.#last_emphasis !== emphasis;
 
         if (
             this.#last_region &&
@@ -176,6 +198,7 @@ export class NetLabelLayers {
         this.#last_region = region;
         this.#last_zoom = zoom;
         this.#last_options = { ...options };
+        this.#last_emphasis = emphasis;
 
         this.#repaint(zoom, region, this.#visible_count(zoom), options);
     }
@@ -239,6 +262,7 @@ export class NetLabelLayers {
                         MIN_GLYPH_PX / min_glyph_height(layout),
                     ),
                     bbox,
+                    net: pad.net?.number ?? 0,
                     pad,
                 });
             }
@@ -265,6 +289,7 @@ export class NetLabelLayers {
                         item.mid,
                         item.end,
                     ]).grow(item.width),
+                    net: item.net,
                     arc: item,
                     name,
                 });
@@ -274,6 +299,7 @@ export class NetLabelLayers {
                     layer,
                     min_zoom,
                     bbox: segment_bbox(item.start, item.end, item.width),
+                    net: item.net,
                     segment: item,
                     name,
                 });
@@ -304,6 +330,7 @@ export class NetLabelLayers {
                         via.size,
                         via.size,
                     ),
+                    net: via.net,
                     via,
                     name,
                 });
@@ -385,6 +412,8 @@ export class NetLabelLayers {
         options: NetLabelOptions,
     ): void {
         const by_layer = new Map<string, LabelLayout[]>();
+        const emphasized: { layout: LabelLayout; color: Color }[] = [];
+        const nets = this.#emphasized_nets;
         for (let i = 0; i < visible_count; i++) {
             const candidate = this.#candidates[i]!;
             if (!bbox_intersects(candidate.bbox, region)) continue;
@@ -396,6 +425,14 @@ export class NetLabelLayers {
                 by_layer.set(candidate.layer, list);
             }
             list.push(...layouts);
+            // The per-layer copy hides with its layer at draw time; the
+            // emphasis copy is one layer, so filter hidden copper here.
+            if (nets?.has(candidate.net)) {
+                const layer = this.layer_set.by_name(candidate.layer);
+                if (!layer?.visible) continue;
+                for (const layout of layouts)
+                    emphasized.push({ layout, color: layer.color });
+            }
         }
 
         for (const layer of this.#layers) {
@@ -410,6 +447,17 @@ export class NetLabelLayers {
                 draw_label(this.gfx, layout, layer.color);
             }
             layer.graphics = this.gfx.end_layer();
+        }
+
+        const emphasis = this.#emphasis_layer();
+        emphasis.graphics?.dispose();
+        emphasis.graphics = undefined;
+        if (emphasized.length) {
+            this.gfx.start_layer(emphasis.name);
+            for (const { layout, color } of emphasized) {
+                draw_label(this.gfx, layout, color);
+            }
+            emphasis.graphics = this.gfx.end_layer();
         }
     }
 }
