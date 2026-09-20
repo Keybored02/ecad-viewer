@@ -25,11 +25,39 @@ export class KiCanvasLoadEvent extends KiCanvasEvent<null> {
 
 export type KiCanvasSelectIntent = "select" | "crossprobe";
 
+/** Modifier keys observed on the click that produced a selection. */
+export interface SelectModifiers {
+    shift: boolean;
+    ctrl: boolean;
+    meta: boolean;
+    alt: boolean;
+}
+
+/**
+ * What the gesture asks the highlight set to do. `toggle` is a shift-click on
+ * a net-bearing item; plain clicks and double-clicks are `replace`.
+ */
+export type KiCanvasSelectOperation = "replace" | "toggle";
+
 interface SelectDetails {
     item: unknown;
     previous: unknown;
     /** Host policy: panel-only select vs full cross-probe. Defaults to select. */
     intent?: KiCanvasSelectIntent;
+    operation?: KiCanvasSelectOperation;
+    modifiers?: SelectModifiers;
+}
+
+export function select_modifiers(
+    event?: MouseEvent | KeyboardEvent,
+): SelectModifiers | undefined {
+    if (!event) return undefined;
+    return {
+        shift: event.shiftKey,
+        ctrl: event.ctrlKey,
+        meta: event.metaKey,
+        alt: event.altKey,
+    };
 }
 
 interface SelectedItems {

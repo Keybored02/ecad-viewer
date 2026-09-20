@@ -21,6 +21,7 @@ import {
     HierarchicalSheetPinClickEvent,
     KiCanvasProbeEvent,
     KiCanvasSelectEvent,
+    select_modifiers,
     LabelClickEvent,
     SheetChangeEvent,
     SheetLoadEvent,
@@ -215,8 +216,14 @@ export class SchematicViewer extends DocumentViewer<
         };
     }
 
-    override on_click(pos: Vec2): void {
+    override on_click(pos: Vec2, event?: MouseEvent): void {
         const ct = this.find_item(pos);
+        const modifiers = select_modifiers(event);
+        // Shift-click asks the host to toggle the item's net in its
+        // highlight set (issue #305); on empty canvas it is a no-op so it
+        // never clears what the user is building up.
+        if (modifiers?.shift && !ct.item) return;
+        const operation = modifiers?.shift ? "toggle" : "replace";
 
         if (ct.item instanceof PinInstance && ct.item.number.trim()) {
             this.dispatchEvent(
@@ -239,6 +246,8 @@ export class SchematicViewer extends DocumentViewer<
                     item: it,
                     previous: null,
                     intent: "select",
+                    operation,
+                    modifiers,
                 }),
             );
 
@@ -267,6 +276,8 @@ export class SchematicViewer extends DocumentViewer<
                     item: null,
                     previous: null,
                     intent: "select",
+                    operation,
+                    modifiers,
                 }),
             );
         }
