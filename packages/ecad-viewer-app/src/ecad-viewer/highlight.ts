@@ -14,6 +14,8 @@ export type EcadNetRef = {
     name: string;
     /** Board-local code, valid only for the loaded board. Optional hint. */
     netCode?: number;
+    /** Copper item uuids of the net, for hosts whose net names differ. */
+    uuids?: readonly string[];
 };
 
 export type EcadHighlightChangeDetail = {

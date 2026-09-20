@@ -392,9 +392,20 @@ export class BoardViewer extends DocumentViewer<
         if (num) this.focus_highlighted_nets();
     }
 
-    public clear_selection() {
+    /**
+     * Drop the inspected object and footprint probe. The highlighted nets go
+     * too unless `keep_highlights` is set, which a host uses when only its
+     * inspected selection changed and its net set still stands.
+     */
+    public clear_selection(keep_highlights = false) {
         this.#crossprobe = null;
         this.#restore_zone_layers();
+        if (keep_highlights && this.#highlighted_nets.size) {
+            this.painter?.clear_interactive();
+            this.#paint_highlight();
+            this.#restore_layer_isolation();
+            return;
+        }
         this.#highlighted_nets = new Set();
         if (this.painter && this.board) {
             this.painter.paint_highlight(
@@ -406,15 +417,19 @@ export class BoardViewer extends DocumentViewer<
         const labels = this.#net_labels_for_current_scene();
         if (labels) labels.emphasized_nets = null;
         this.painter?.clear_interactive();
-        // Clearing a selection or net probe must not undo the user's layer
-        // isolation, which is an independent view choice made from the layer
-        // menu. Re-apply it after clearing rather than dropping to no highlight.
+        this.#restore_layer_isolation();
+        this.draw();
+    }
+
+    // Clearing a selection or net probe must not undo the user's layer
+    // isolation, which is an independent view choice made from the layer
+    // menu. Re-apply it after clearing rather than dropping to no highlight.
+    #restore_layer_isolation() {
         const isolated = this.#isolated_layer
             ? this.layers?.by_name(this.#isolated_layer)
             : null;
         this.layers?.highlight(isolated ?? null);
         this.#layer_visibility_ctrl?.update_item_states();
-        this.draw();
     }
 
     public capture_diff_layer_visibility(): Map<string, boolean> {

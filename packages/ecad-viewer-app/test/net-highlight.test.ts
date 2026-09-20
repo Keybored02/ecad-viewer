@@ -335,7 +335,7 @@ type Host = HTMLElement & {
     }): Promise<void>;
     ready: Promise<void>;
     setHighlightedNets(
-        nets: Array<{ name: string; netCode?: number }>,
+        nets: Array<{ name: string; netCode?: number; uuids?: string[] }>,
         options?: { focus?: boolean },
     ): {
         applied: Array<{ name: string; netCode?: number }>;
@@ -343,7 +343,7 @@ type Host = HTMLElement & {
     };
     getHighlightedNets(): Array<{ name: string; netCode?: number }>;
     focusHighlightedNets(): boolean;
-    clearSelection(): void;
+    clearSelection(options?: { keepHighlights?: boolean }): void;
     requestCrossProbe(request: Record<string, unknown>): boolean;
     camera: { x: number; y: number; zoom: number } | null;
 };
@@ -434,6 +434,25 @@ suite("net highlight: element API", () => {
         expect(changes).to.deep.equal([{ nets: [], source: "clear" }]);
         host.clearSelection();
         expect(changes).to.have.length(1);
+    });
+
+    test("a host clearing only its inspected object keeps the set", () => {
+        host.setHighlightedNets([{ name: "NET_A" }]);
+        host.clearSelection({ keepHighlights: true });
+        expect(host.getHighlightedNets().map((n) => n.name)).to.deep.equal([
+            "NET_A",
+        ]);
+        expect(board_viewer_of(host).painter.highlight_nets).to.deep.equal(
+            new Set([1]),
+        );
+        expect(changes).to.have.length(0);
+    });
+
+    test("resolves a net by copper uuid when the name is unknown", () => {
+        const result = host.setHighlightedNets([
+            { name: "/sheet/NET_A", uuids: ["seg-a"] },
+        ]);
+        expect(result.applied.map((n) => n.name)).to.deep.equal(["NET_A"]);
     });
 
     test("requestCrossProbe is a replace-of-one the host hears about", () => {

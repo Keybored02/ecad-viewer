@@ -2499,13 +2499,19 @@ export class ECadViewer extends KCUIElement implements InputContainer {
         this.#safe_schematic_viewer()?.set_comment_mode(enabled);
     }
 
-    public clearSelection(): void {
+    /**
+     * Drop the inspected object in both viewers. The highlighted nets are
+     * dropped too unless `keepHighlights` is set: a host that owns the set
+     * passes it when only its inspected selection changed.
+     */
+    public clearSelection(options: { keepHighlights?: boolean } = {}): void {
         this.#probe_generation += 1;
-        const had_nets =
-            (this.#safe_board_viewer()?.highlighted_nets.size ?? 0) > 0;
-        this.#safe_board_viewer()?.clear_selection();
+        const board_viewer = this.#safe_board_viewer();
+        const had_nets = (board_viewer?.highlighted_nets.size ?? 0) > 0;
+        board_viewer?.clear_selection(options.keepHighlights === true);
         this.#safe_schematic_viewer()?.clear_selection();
-        if (had_nets) this.#emit_highlight_change("clear");
+        if (had_nets && !options.keepHighlights)
+            this.#emit_highlight_change("clear");
     }
 
     /**
