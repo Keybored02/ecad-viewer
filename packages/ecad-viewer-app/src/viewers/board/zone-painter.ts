@@ -9,8 +9,12 @@ import {
 } from "./layers";
 import { BoardItemPainter } from "./painter-base";
 
-/** Fill alpha of a highlighted zone; matches the zone layers' default opacity. */
-const ZONE_EMPHASIS_ALPHA = 0.6;
+/**
+ * Fill alpha of a highlighted zone. Lower than the zone layers' own 0.6: the
+ * emphasis pass sits above every native layer, so a pour of the highlighted
+ * net would otherwise hide the (dimmed) tracks of other nets crossing it.
+ */
+const ZONE_EMPHASIS_ALPHA = 0.4;
 
 export class ZonePainter extends BoardItemPainter {
     classes = [board_items.Zone];
