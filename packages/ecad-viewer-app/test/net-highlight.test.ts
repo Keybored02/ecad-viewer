@@ -157,6 +157,7 @@ suite("net highlight: board viewer set", () => {
             HIGHLIGHT_DIM_OPACITY,
         );
         expect(viewer.layers.selection_fg.graphics).to.not.equal(undefined);
+        expect(viewer.layers.selection_mask.graphics).to.not.equal(undefined);
         expect(viewer.painter.highlight_nets).to.deep.equal(new Set([1, 2]));
 
         viewer.clear_selection();

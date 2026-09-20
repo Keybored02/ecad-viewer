@@ -45,6 +45,7 @@ export abstract class BoardItemPainter extends ItemPainter {
         ViewLayerNames.overlay,
         ViewLayerNames.selection_bg,
         ViewLayerNames.selection_fg,
+        ViewLayerNames.selection_mask,
     ]);
 
     color_for(layer_name: string): Color {

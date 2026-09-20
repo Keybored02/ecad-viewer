@@ -658,6 +658,13 @@ class DimensionPainter extends BoardItemPainter {
 /** Alpha of the dim pass drawn over the board while nets are highlighted. */
 export const HIGHLIGHT_DIM_OPACITY = 0.72;
 
+/**
+ * Opacity of highlighted zone fills. Below the zone layers' own 0.6 because
+ * the emphasis sits above every native layer, and a pour of the highlighted
+ * net would otherwise hide the dimmed tracks of other nets crossing it.
+ */
+export const ZONE_EMPHASIS_OPACITY = 0.45;
+
 export class BoardPainter extends DocumentPainter {
     override theme: BoardTheme;
 
@@ -838,18 +845,19 @@ export class BoardPainter extends DocumentPainter {
             layer.graphics.composite_operation = "source-over";
         }
 
-        // Emphasis pass: members in native colours, tracks over zones and
-        // pads over tracks so the copper reads the way the board does.
+        // Emphasis pass, split over two layers so a highlighted pour sits
+        // under the tracks and at its own translucency: zone fills on the
+        // foreground layer, tracks / vias / pads on the mask layer above it.
+        // Vertex alpha is not blended by the renderer; layer opacity is.
+        let bbox: BBox | null = null;
+        let zone_bbox: BBox | null = null;
+        const grow = (box: BBox) => {
+            bbox = bbox ? BBox.combine([bbox, box]) : box;
+        };
         {
             const layer = this.layers.selection_fg;
-            layer.opacity = 1;
-            let bbox: BBox | null = null;
-            let zone_bbox: BBox | null = null;
-            const grow = (box: BBox) => {
-                bbox = bbox ? BBox.combine([bbox, box]) : box;
-            };
+            layer.opacity = ZONE_EMPHASIS_OPACITY;
             this.gfx.start_layer(layer.name);
-
             for (const zone of board.zones) {
                 if (!nets.has(zone.net) || !zone.filled_polygons) continue;
                 const zone_layers = zone.layers ?? [zone.layer];
@@ -861,6 +869,13 @@ export class BoardPainter extends DocumentPainter {
                         ? BBox.combine([zone_bbox, box])
                         : box;
             }
+            layer.graphics = this.gfx.end_layer();
+            layer.graphics.composite_operation = "source-over";
+        }
+        {
+            const layer = this.layers.selection_mask;
+            layer.opacity = 1;
+            this.gfx.start_layer(layer.name);
             for (const track of board.segments) {
                 if (!nets.has(track.net) || !layer_visible(track.layer))
                     continue;
@@ -882,11 +897,10 @@ export class BoardPainter extends DocumentPainter {
                     if (box?.valid) grow(box);
                 }
             }
-
             layer.graphics = this.gfx.end_layer();
             layer.graphics.composite_operation = "source-over";
-            this.#highlight_bbox = bbox ?? zone_bbox;
         }
+        this.#highlight_bbox = bbox ?? zone_bbox;
 
         return true;
     }

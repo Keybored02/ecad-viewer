@@ -9,13 +9,6 @@ import {
 } from "./layers";
 import { BoardItemPainter } from "./painter-base";
 
-/**
- * Fill alpha of a highlighted zone. Lower than the zone layers' own 0.6: the
- * emphasis pass sits above every native layer, so a pour of the highlighted
- * net would otherwise hide the (dimmed) tracks of other nets crossing it.
- */
-const ZONE_EMPHASIS_ALPHA = 0.4;
-
 export class ZonePainter extends BoardItemPainter {
     classes = [board_items.Zone];
 
@@ -48,11 +41,9 @@ export class ZonePainter extends BoardItemPainter {
                 continue;
             }
 
-            // Repainted above the dim pass, a fill keeps its copper colour at
-            // the zone layers' translucency so tracks stay visible through it.
-            const color = emphasised
-                ? this.color_for(p.layer).with_alpha(ZONE_EMPHASIS_ALPHA)
-                : layer.color;
+            // Repainted above the dim pass, a fill keeps its copper colour;
+            // the emphasis layer's own opacity keeps it translucent.
+            const color = emphasised ? this.color_for(p.layer) : layer.color;
 
             // FIXME paint the arc in the polygon
             this.gfx.polygon(new Polygon(p.points, color));
