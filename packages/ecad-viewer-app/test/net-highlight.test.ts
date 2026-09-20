@@ -32,9 +32,10 @@ import {
 import { KiCanvasSelectEvent } from "../src/viewers/base/events";
 import { Depth } from "../src/kicad/board_bbox_visitor";
 
-// Two nets. NET_A: R1.1 (SMD, F.Cu) and a 10 mm F.Cu track whose end sits
-// under R1.1 (a pad-over-track hit), a via and a filled B.Cu zone. NET_B:
-// R1.2 and a 3 mm In1.Cu track. R2.1 is unconnected.
+// Two nets. NET_A: R1.1 (SMD, F.Cu), a 10 mm F.Cu track whose end sits
+// under R1.1 (a pad-over-track hit), a B.Cu track running under R1.2 (a
+// pad over another net's track), a via and a filled B.Cu zone. NET_B: R1.2
+// and a 3 mm In1.Cu track. R2.1 is unconnected.
 const BOARD = `
 (kicad_pcb
   (version 20240108)
@@ -60,6 +61,7 @@ const BOARD = `
     (pad "1" smd rect (at -1 0) (size 1.2 1.2) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "r2-1"))
   )
   (segment (start 9 10) (end 19 10) (width 0.4) (layer "F.Cu") (net 1) (uuid "seg-a"))
+  (segment (start 20 9) (end 22 11) (width 0.4) (layer "B.Cu") (net 1) (uuid "seg-a-bcu"))
   (segment (start 21 15) (end 24 15) (width 0.4) (layer "In1.Cu") (net 2) (uuid "seg-b"))
   (via (at 9 10) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1) (uuid "via-a"))
   (zone (net 1) (net_name "NET_A") (layer "B.Cu") (uuid "zone-a") (hatch edge 0.5)
@@ -167,9 +169,9 @@ suite("net highlight: board viewer set", () => {
         viewer.set_highlighted_nets([1]);
         const box = viewer.painter.highlight_bbox!;
         expect(box.valid).to.equal(true);
-        // Track from x=9 to 19 with via at 9 and pad at 19.
+        // Via at 9, F.Cu track to 19, pad at 19, B.Cu track to 22.
         expect(box.x).to.be.closeTo(8.6, 0.05);
-        expect(box.x2).to.be.closeTo(19.6, 0.05);
+        expect(box.x2).to.be.closeTo(22.2, 0.05);
         // The NET_B track on In1.Cu is not part of it.
         expect(box.y2).to.be.lessThan(14);
 
@@ -286,6 +288,15 @@ suite("net highlight: click gestures", () => {
         expect(hits.length).to.equal(2);
         expect(shared_net(hits)).to.equal(1);
         expect(pick_item(hits)!.depth).to.equal(Depth.PAD);
+    });
+
+    test("a pad over another net's track toggles the pad's net", () => {
+        // R1.2 (NET_B) sits over a B.Cu track of NET_A: the pad wins.
+        viewer.on_click(R1_PAD2, click(true));
+        expect(events).to.have.length(1);
+        const item = events[0]!.detail.item as board_items.Pad;
+        expect(item).to.be.instanceOf(board_items.Pad);
+        expect(item.net?.name).to.equal("NET_B");
     });
 
     test("shift-click toggles the net and carries the intent", () => {

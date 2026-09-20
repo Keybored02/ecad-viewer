@@ -532,12 +532,13 @@ export class BoardViewer extends DocumentViewer<
             this.dispatchEvent(new KiCanvasProbeEvent({ phase: "clear" }));
         }
 
-        // Shift-click toggles the net under the cursor. A pad with a track
-        // ending under it hits two items; when every hit shares one net the
-        // gesture is unambiguous and no disambiguation is needed.
+        // Shift-click toggles the net of the most specific item under the
+        // cursor: the pad the user aimed at, not the other-layer track that
+        // happens to run beneath it. An unconnected pick falls back to the
+        // net its neighbours share, so a hole over one net still counts.
         if (modifiers?.shift) {
-            const net = shared_net(items);
-            const target = net ? pick_item(items) : null;
+            const target = pick_item(items);
+            const net = target?.net || shared_net(items);
             if (net && target) {
                 this.dispatchEvent(
                     new KiCanvasSelectEvent({
