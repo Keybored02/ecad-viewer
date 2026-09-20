@@ -747,13 +747,22 @@ export class BoardPainter extends DocumentPainter {
         outline.graphics.composite_operation = "source-over";
     }
 
+    /**
+     * Empty the interactive layers and forget any highlight. The highlight
+     * pass drives these layers' opacity; a later outline, hatch or diff
+     * paint expects them opaque again.
+     */
     clear_interactive() {
         for (const layer of [
             this.layers.selection_bg,
             this.layers.selection_fg,
             this.layers.selection_mask,
-        ])
+        ]) {
             layer.clear();
+            layer.opacity = 1;
+        }
+        this.#highlight_bbox = null;
+        this.#highlight_nets = null;
     }
 
     /**
@@ -819,8 +828,6 @@ export class BoardPainter extends DocumentPainter {
         layer_visible: (layer_name: string) => boolean,
     ): boolean {
         this.clear_interactive();
-        this.#highlight_bbox = null;
-        this.#highlight_nets = null;
         if (nets.size === 0) return false;
         this.#highlight_nets = new Set(nets);
 

@@ -219,6 +219,21 @@ suite("net highlight: board viewer set", () => {
         viewer.highlight_fp(fp);
         expect(viewer.highlighted_nets.size).to.equal(0);
     });
+
+    test("a footprint paint after a highlight is opaque and forgets the set", () => {
+        viewer.set_highlighted_nets([1]);
+        expect(viewer.layers.selection_fg.opacity).to.be.lessThan(1);
+        viewer.highlight_fp(viewer.board.footprints[1]!);
+        for (const layer of [
+            viewer.layers.selection_bg,
+            viewer.layers.selection_fg,
+            viewer.layers.selection_mask,
+        ])
+            expect(layer.opacity).to.equal(1);
+        expect(viewer.painter.highlight_nets).to.equal(null);
+        expect(viewer.painter.highlight_bbox).to.equal(null);
+        expect(viewer.focus_highlighted_nets()).to.equal(false);
+    });
 });
 
 suite("net highlight: labels survive the dim", () => {
