@@ -166,6 +166,39 @@ suite("net highlight: board viewer set", () => {
         expect(viewer.painter.highlight_nets).to.equal(null);
     });
 
+    test("highlight overlays stay inside clip depth with many zoom label layers", async () => {
+        viewer.set_highlighted_nets([1]);
+
+        // Large production boards can activate more than 100 dynamic label
+        // layers after crossing a zoom threshold. Model those foreground
+        // inputs without depending on a huge fixture.
+        for (let index = 0; index < 120; index++) {
+            const dynamic = (viewer.layers as LayerSet).extension_layer(
+                `zoom-label-${index}`,
+                "content-overlay",
+            );
+            dynamic.graphics = {
+                render() {},
+                dispose() {},
+            } as never;
+        }
+
+        let selection_depth = Number.NaN;
+        const selection = viewer.layers.selection_mask.graphics!;
+        const original_render = selection.render.bind(selection);
+        selection.render = (camera, depth, alpha) => {
+            selection_depth = depth;
+            original_render(camera, depth, alpha);
+        };
+
+        viewer.draw();
+        await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        expect(selection_depth).to.be.greaterThan(0);
+        expect(selection_depth).to.be.lessThan(1);
+    });
+
     test("the fit box covers the highlighted copper, not the zone alone", () => {
         viewer.set_highlighted_nets([1]);
         const box = viewer.painter.highlight_bbox!;
