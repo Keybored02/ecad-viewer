@@ -641,8 +641,19 @@ export abstract class Viewer extends EventTarget {
             return;
         }
 
-        // Render all layers in display order (back to front)
-        let depth = 0.01;
+        // Render all layers in display order (back to front). Allocate the
+        // available clip-space depth across the layers that will actually be
+        // drawn. A fixed increment overflows once zoom-dependent label layers
+        // take a dense board past 100 drawable layers, clipping late overlays
+        // such as the selected-net pass while leaving its dim pass visible.
+        const display_layers = Array.from(this.layers.in_display_order());
+        const drawable_layer_count = display_layers.reduce(
+            (count, layer) =>
+                count + (layer.visible && layer.graphics ? 1 : 0),
+            0,
+        );
+        const depth_step = 0.98 / Math.max(1, drawable_layer_count);
+        let depth = depth_step;
         const camera = this.viewport.camera.matrix;
         const should_dim = this.layers.is_any_layer_highlighted();
 
@@ -651,7 +662,7 @@ export abstract class Viewer extends EventTarget {
             .gl;
         let blend_off = false;
 
-        for (const layer of this.layers.in_display_order()) {
+        for (const layer of display_layers) {
             if (layer.visible && layer.graphics) {
                 let alpha = layer.opacity;
 
@@ -671,7 +682,7 @@ export abstract class Viewer extends EventTarget {
                 }
 
                 layer.graphics.render(camera, depth, alpha);
-                depth += 0.01;
+                depth += depth_step;
             }
         }
         if (blend_off && gl) {
