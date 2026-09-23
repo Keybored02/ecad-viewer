@@ -452,7 +452,13 @@ export class SchematicViewer extends DocumentViewer<
         const bounds = this.schematic_renderer.get_item_bbox(uuid);
         return bounds
             ? {
-                  point: bounds.center,
+                  point:
+                      anchor.kind === "source-item" && anchor.relativePoint
+                          ? new Vec2(
+                                bounds.x + bounds.w * anchor.relativePoint[0],
+                                bounds.y + bounds.h * anchor.relativePoint[1],
+                            )
+                          : bounds.center,
                   bounds,
                   page: anchor.page ?? this.sch_name,
               }
