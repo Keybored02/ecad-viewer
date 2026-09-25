@@ -501,6 +501,13 @@ export abstract class Viewer extends EventTarget {
         return null;
     }
 
+    /** Allow the host's narrow comment API to report missing source anchors. */
+    public resolve_overlay_anchor_for_host(
+        anchor: EcadOverlayAnchor,
+    ): ResolvedOverlayAnchor | null {
+        return this.resolve_overlay_anchor(anchor);
+    }
+
     protected rebind_overlay_layers(
         retained_channels: ReadonlySet<string> = new Set(),
     ) {
@@ -648,8 +655,7 @@ export abstract class Viewer extends EventTarget {
         // such as the selected-net pass while leaving its dim pass visible.
         const display_layers = Array.from(this.layers.in_display_order());
         const drawable_layer_count = display_layers.reduce(
-            (count, layer) =>
-                count + (layer.visible && layer.graphics ? 1 : 0),
+            (count, layer) => count + (layer.visible && layer.graphics ? 1 : 0),
             0,
         );
         const depth_step = 0.98 / Math.max(1, drawable_layer_count);

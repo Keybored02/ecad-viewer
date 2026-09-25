@@ -66,9 +66,11 @@ import {
     EcadCommentOverlayClickEvent,
     comment_id_from_primitive,
     comment_overlay_scene,
+    resolve_comment_overlays,
     type EcadCommentContext,
     type EcadCommentOverlayHitDetail,
     type EcadCommentOverlaySet,
+    type EcadCommentAnchorResolution,
 } from "./comment-overlay";
 import {
     EcadCrossProbeEvent,
@@ -130,6 +132,7 @@ export type {
     EcadCommentOverlay,
     EcadCommentOverlayHitDetail,
     EcadCommentOverlaySet,
+    EcadCommentAnchorResolution,
 } from "./comment-overlay";
 export { EcadCommentOverlayClickEvent } from "./comment-overlay";
 export type {
@@ -2577,10 +2580,21 @@ export class ECadViewer extends KCUIElement implements InputContainer {
      * Publish comment markers and optional comment areas. Arbitrary graphics
      * are intentionally not exposed at the host boundary.
      */
-    public setCommentOverlays(request: EcadCommentOverlaySet): void {
+    public setCommentOverlays(
+        request: EcadCommentOverlaySet,
+    ): EcadCommentAnchorResolution[] {
         const scene = comment_overlay_scene(request);
         this.#comment_overlay_scenes.set(request.context, scene);
-        this.#viewer_for_context(request.context)?.set_overlay_scene(scene);
+        const viewer = this.#viewer_for_context(request.context);
+        viewer?.set_overlay_scene(scene);
+        if (!viewer)
+            return request.comments.map(({ id }) => ({
+                id,
+                state: "not-loaded",
+            }));
+        return resolve_comment_overlays(request, (anchor) =>
+            viewer.resolve_overlay_anchor_for_host(anchor),
+        );
     }
 
     public clearCommentOverlays(context?: EcadCommentContext): void {

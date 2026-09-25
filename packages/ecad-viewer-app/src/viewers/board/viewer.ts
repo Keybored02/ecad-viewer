@@ -947,7 +947,16 @@ export class BoardViewer extends DocumentViewer<
         if (anchor.kind === "source-item") {
             const bounds = this.#overlay_item_bounds.get(anchor.uuid);
             return bounds
-                ? { point: bounds.center, bounds, page: anchor.page }
+                ? {
+                      point: anchor.relativePoint
+                          ? new Vec2(
+                                bounds.x + bounds.w * anchor.relativePoint[0],
+                                bounds.y + bounds.h * anchor.relativePoint[1],
+                            )
+                          : bounds.center,
+                      bounds,
+                      page: anchor.page,
+                  }
                 : null;
         }
         if (anchor.kind === "entity" && anchor.reference) {
