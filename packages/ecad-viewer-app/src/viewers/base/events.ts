@@ -25,11 +25,39 @@ export class KiCanvasLoadEvent extends KiCanvasEvent<null> {
 
 export type KiCanvasSelectIntent = "select" | "crossprobe";
 
+/** Modifier keys observed on the click that produced a selection. */
+export interface SelectModifiers {
+    shift: boolean;
+    ctrl: boolean;
+    meta: boolean;
+    alt: boolean;
+}
+
+/**
+ * What the gesture asks the highlight set to do. `toggle` is a shift-click on
+ * a net-bearing item; plain clicks and double-clicks are `replace`.
+ */
+export type KiCanvasSelectOperation = "replace" | "toggle";
+
 interface SelectDetails {
     item: unknown;
     previous: unknown;
     /** Host policy: panel-only select vs full cross-probe. Defaults to select. */
     intent?: KiCanvasSelectIntent;
+    operation?: KiCanvasSelectOperation;
+    modifiers?: SelectModifiers;
+}
+
+export function select_modifiers(
+    event?: MouseEvent | KeyboardEvent,
+): SelectModifiers | undefined {
+    if (!event) return undefined;
+    return {
+        shift: event.shiftKey,
+        ctrl: event.ctrlKey,
+        meta: event.metaKey,
+        alt: event.altKey,
+    };
 }
 
 interface SelectedItems {
@@ -50,6 +78,30 @@ export class KiCanvasSelectEvent extends KiCanvasEvent<SelectDetails> {
 
     constructor(detail: SelectDetails) {
         super(KiCanvasSelectEvent.type, detail, true);
+    }
+}
+
+export type KiCanvasProbePhase = "hover" | "leave" | "activate" | "clear";
+export type KiCanvasProbeSource = "pin" | "pad";
+
+export type KiCanvasProbeDetail =
+    | {
+          phase: Exclude<KiCanvasProbePhase, "clear">;
+          source: KiCanvasProbeSource;
+          number: string;
+          index: string;
+          crossIndex: string;
+      }
+    | {
+          phase: "clear";
+      };
+
+/** Structured pin/pad interaction used by lightweight library render hosts. */
+export class KiCanvasProbeEvent extends KiCanvasEvent<KiCanvasProbeDetail> {
+    static readonly type = "kicanvas:probe";
+
+    constructor(detail: KiCanvasProbeDetail) {
+        super(KiCanvasProbeEvent.type, detail, true);
     }
 }
 
@@ -422,6 +474,7 @@ export class LoadZipErrorEvent extends CustomEvent<string> {
 export interface KiCanvasEventMap {
     [KiCanvasLoadEvent.type]: KiCanvasLoadEvent;
     [KiCanvasSelectEvent.type]: KiCanvasSelectEvent;
+    [KiCanvasProbeEvent.type]: KiCanvasProbeEvent;
     [EcadOverlayClickEvent.type]: EcadOverlayClickEvent;
     [EcadOverlayHoverEvent.type]: EcadOverlayHoverEvent;
     [EcadOverlayLeaveEvent.type]: EcadOverlayLeaveEvent;

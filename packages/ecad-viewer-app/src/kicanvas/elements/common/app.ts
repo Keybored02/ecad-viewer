@@ -257,62 +257,44 @@ export abstract class KCViewerAppElement<
             documentViewer.set_drawing_sheet?.(
                 this.project.drawing_sheet_for(this.assert_type(), src),
             );
-            if (
-                "document" in documentViewer
-                && (documentViewer as Viewer & { document?: unknown }).document
-                    === src
-            ) {
-                this.revealLoadedContent();
-                const settled = documentViewer as Viewer & {
-                    renderer?: { update_canvas_size?: () => void };
-                    viewport?: { sync_from_canvas?: () => boolean };
-                    draw_now?: () => void;
-                    draw?: () => void;
-                };
-                settled.renderer?.update_canvas_size?.();
-                settled.viewport?.sync_from_canvas?.();
-                settled.draw_now?.() ?? settled.draw?.();
-                return;
-            }
-            await this.#viewer_elm.load(src);
-            if (documentViewer.is_disposed) {
-                return;
-            }
-            if (this.#content) {
-                this.#content.hidden = false;
-            }
-            this.#placeholder.hidden = true;
-            // Load often paints while content_container is still hidden
-            // (0×0). Sync viewport size, then fit + draw immediately so we
-            // never leave Camera2.zoom at 0 from a pre-layout fit.
             const settled = this.viewer as Viewer & {
                 document?: unknown;
-                paint?: () => void;
                 draw?: () => void;
                 draw_now?: () => void;
                 zoom_fit_top_item?: () => void;
                 renderer?: { update_canvas_size?: () => void };
-                canvas?: HTMLCanvasElement;
-                viewport?: {
-                    sync_from_canvas?: () => boolean;
-                    camera?: { zoom?: number; viewport_size?: { x: number; y: number } };
-                };
+                viewport?: { sync_from_canvas?: () => boolean };
                 is_disposed?: boolean;
             };
-            if (settled?.is_disposed) {
+            const sync_viewport = () => {
+                if (settled?.is_disposed) return false;
+                settled.renderer?.update_canvas_size?.();
+                return settled.viewport?.sync_from_canvas?.() ?? false;
+            };
+            if (
+                "document" in documentViewer &&
+                (documentViewer as Viewer & { document?: unknown }).document ===
+                    src
+            ) {
+                this.revealLoadedContent();
+                sync_viewport();
+                settled.draw_now?.() ?? settled.draw?.();
                 return;
             }
-            const settle_visible = () => {
-                if (!settled?.document || settled.is_disposed) return;
-                settled.renderer?.update_canvas_size?.();
-                const sized = settled.viewport?.sync_from_canvas?.() ?? false;
-                settled.paint?.();
-                if (sized) {
-                    settled.zoom_fit_top_item?.();
-                }
-                settled.draw_now?.() ?? settled.draw?.();
-            };
-            settle_visible();
+            // Unhide before tessellating so viewport.ready can open. Painting
+            // while content_container is display:none still earcuts the whole
+            // board and used to be thrown away by a second sized paint.
+            this.revealLoadedContent();
+            sync_viewport();
+            await this.#viewer_elm.load(src);
+            if (documentViewer.is_disposed || settled?.is_disposed) {
+                return;
+            }
+            const sized = sync_viewport();
+            if (sized) {
+                settled.zoom_fit_top_item?.();
+            }
+            settled.draw_now?.() ?? settled.draw?.();
         } else {
             if (this.#content) {
                 this.#content.hidden = true;

@@ -30,11 +30,8 @@ import {
     NetLabelPainter,
 } from "./painters/label";
 import { PinPainter } from "./painters/pin";
-import {
-    LibSymbolPainter,
-    SchematicSymbolPainter,
-    type SymbolTransform,
-} from "./painters/symbol";
+import { LibSymbolPainter, SchematicSymbolPainter } from "./painters/symbol";
+import type { SymbolTransform } from "../../kicad/symbol-transform";
 
 class RectanglePainter extends SchematicItemPainter {
     classes = [schematic_items.Rectangle];
@@ -635,7 +632,12 @@ class SchematicSheetPainter extends SchematicItemPainter {
             LayerNames.symbol_field,
         ];
 
-        if (item.dnp) {
+        // Sheet DNP is the effective (folded) flag under the active variant;
+        // the base flag is only the fallback without a project context.
+        const dnp =
+            this.view_painter.active_instance_context?.sheet_dnp(item) ??
+            item.dnp;
+        if (dnp) {
             layers.push(LayerNames.marks);
         }
 
@@ -684,7 +686,11 @@ class SchematicSheetPainter extends SchematicItemPainter {
             }
         }
 
-        if (ss.dnp && layer.name == LayerNames.marks) {
+        if (
+            (this.view_painter.active_instance_context?.sheet_dnp(ss) ??
+                ss.dnp) &&
+            layer.name == LayerNames.marks
+        ) {
             paint_dnp_cross(
                 this.gfx,
                 dnp_marker_bbox(bbox, measure_sheet_bbox(this.theme, ss)),
